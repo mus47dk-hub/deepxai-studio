@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     })();
 
     return NextResponse.json({
-      image: body.image,
+      url: body.image,
       model: body.model,
       pipeline,
     });

@@ -315,23 +315,9 @@ function Compare({
   beforeImageSrc,
 }: {
   position: number;
-  imageSrc?: string;
-  beforeImageSrc?: string;
+  imageSrc: string;
+  beforeImageSrc: string;
 }) {
-  const rawImage = imageSrc
-    ? (beforeImageSrc ?? comparisonOriginals.get(imageSrc) ?? imageSrc)
-    : undefined;
-  if (!imageSrc || !rawImage) {
-    return (
-      <div
-        className="empty-upload-zone compare-empty"
-        aria-label="Upload an image to compare"
-      >
-        <span>Upload an image to compare</span>
-      </div>
-    );
-  }
-
   return (
     <div className="compare">
       <img className="compare-image after-image" src={imageSrc} alt="After" />
@@ -341,7 +327,7 @@ function Compare({
           clipPath: `polygon(0 0, ${position}% 0, ${position}% 100%, 0 100%)`,
         }}
       >
-        <img className="compare-image" src={rawImage} alt="Before" />
+        <img className="compare-image" src={beforeImageSrc} alt="Before" />
       </div>
       <div className="compare-handle" style={{ left: `${position}%` }}>
         <b>↔</b>
@@ -431,6 +417,7 @@ export default function Page() {
     useState<EnhancerModel>("real-esrgan-4x");
   const [processedImage, setProcessedImage] = useState<string | null>(null);
   const [enhancerProcessing, setEnhancerProcessing] = useState(false);
+  const [isEnhancing, setIsEnhancing] = useState(false);
   const [editorProcessing, setEditorProcessing] = useState(false);
   const [enhancerError, setEnhancerError] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -578,25 +565,28 @@ export default function Page() {
     event.target.value = "";
   };
   const handleEnhance = async () => {
-    const sourceImage = enhancerImage;
-    if (!sourceImage || !processingCanvasRef.current) return;
-    if (!sourceImage.startsWith("data:image/")) {
-      setEnhancerError("This photo has an invalid image format.");
-      setToast("This photo could not be enhanced.");
-      return;
-    }
-    if (!consumeCredit()) return;
-
-    const requestVersion = enhancerUploadVersionRef.current;
-    setEnhancerProcessing(true);
-    setEnhancerError(null);
+    let requestVersion = enhancerUploadVersionRef.current;
     const failEnhancement = () => {
-      if (requestVersion !== enhancerUploadVersionRef.current) return;
+      setIsEnhancing(false);
       setEnhancerProcessing(false);
-      setEnhancerError("This photo could not be enhanced.");
-      setToast("This photo could not be enhanced.");
+      setEnhancerError("Enhancement failed, please try again");
+      setToast("Enhancement failed, please try again");
     };
+
     try {
+      const sourceImage = enhancerImage;
+      if (!sourceImage || !processingCanvasRef.current) {
+        throw new Error("Upload a photo before enhancing it");
+      }
+      if (!sourceImage.startsWith("data:image/")) {
+        throw new Error("This photo has an invalid image format");
+      }
+      if (!consumeCredit()) return;
+
+      requestVersion = enhancerUploadVersionRef.current;
+      setIsEnhancing(true);
+      setEnhancerProcessing(true);
+      setEnhancerError(null);
       const response = await fetch("/api/enhance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -607,8 +597,9 @@ export default function Page() {
         !response.ok ||
         typeof result !== "object" ||
         result === null ||
-        !("image" in result) ||
-        typeof result.image !== "string"
+        !("url" in result) ||
+        typeof result.url !== "string" ||
+        !result.url
       ) {
         throw new Error("Enhancement service unavailable");
       }
@@ -617,61 +608,46 @@ export default function Page() {
       image.onload = () => {
         if (requestVersion !== enhancerUploadVersionRef.current) return;
         try {
-        const canvas = processingCanvasRef.current;
-        const context = canvas?.getContext("2d", { willReadFrequently: true });
-        if (
-          !canvas ||
-          !context ||
-          image.naturalWidth === 0 ||
-          image.naturalHeight === 0
-        ) {
-          failEnhancement();
-          return;
-        }
+          const canvas = processingCanvasRef.current;
+          const context = canvas?.getContext("2d", {
+            willReadFrequently: true,
+          });
+          if (!canvas || !context || !image.naturalWidth || !image.naturalHeight) {
+            throw new Error("The enhanced image is empty");
+          }
 
-        canvas.width = image.naturalWidth * 2;
-        canvas.height = image.naturalHeight * 2;
-        context.filter = "none";
-        context.imageSmoothingEnabled = true;
-        context.imageSmoothingQuality = "high";
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-        let enhancedPixels = context.getImageData(
-          0,
-          0,
-          canvas.width,
-          canvas.height,
-        );
-        const sharpenPasses =
-          enhancerModel === "real-esrgan-4x"
-            ? 3
-            : enhancerModel === "gfpgan-face"
-              ? 1
-              : 2;
-        for (let pass = 0; pass < sharpenPasses; pass += 1) {
-          enhancedPixels = sharpenImage(enhancedPixels);
-        }
-        stretchContrast(enhancedPixels);
-        if (enhancerModel !== "gfpgan-face") {
-          boostMicroContrast(enhancedPixels);
-        }
-        context.putImageData(enhancedPixels, 0, 0);
-        const enhancedDataUrl = canvas.toDataURL("image/jpeg", 0.95);
-        comparisonOriginals.set(enhancedDataUrl, sourceImage);
-        setEnhancedImage(enhancedDataUrl);
-        saveHistory(
-          enhancedDataUrl,
-          "HD Enhancement",
-          `${sharpness}% sharpness · ${clarity}% clarity · ${bokeh}px bokeh`,
-        );
-        setEnhancerProcessing(false);
+          canvas.width = image.naturalWidth * 2;
+          canvas.height = image.naturalHeight * 2;
+          context.filter = "none";
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = "high";
+          context.clearRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          let enhancedPixels = context.getImageData(
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          );
+          const sharpenPasses = enhancerModel === "real-esrgan-4x" ? 3 : enhancerModel === "gfpgan-face" ? 1 : 2;
+          for (let pass = 0; pass < sharpenPasses; pass += 1) {
+            enhancedPixels = sharpenImage(enhancedPixels);
+          }
+          stretchContrast(enhancedPixels);
+          if (enhancerModel !== "gfpgan-face") boostMicroContrast(enhancedPixels);
+          context.putImageData(enhancedPixels, 0, 0);
+          const enhancedDataUrl = canvas.toDataURL("image/jpeg", 0.95);
+          comparisonOriginals.set(enhancedDataUrl, sourceImage);
+          setEnhancedImage(enhancedDataUrl);
+          saveHistory(enhancedDataUrl, "HD Enhancement", `${sharpness}% sharpness · ${clarity}% clarity · ${bokeh}px bokeh`);
+          setIsEnhancing(false);
+          setEnhancerProcessing(false);
         } catch {
           failEnhancement();
         }
       };
       image.onerror = failEnhancement;
-      image.src = result.image;
+      image.src = result.url;
     } catch {
       failEnhancement();
     }
@@ -783,7 +759,7 @@ export default function Page() {
   const uploadedImage = tab === "Enhancer" ? enhancerImage : editorImage;
   const processing = tab === "Enhancer" ? enhancerProcessing : editorProcessing;
   const processingError = tab === "Enhancer" ? enhancerError : editorError;
-  const enhancerDownload = enhancedImage ?? enhancerImage;
+  const enhancerDownload = enhancedImage;
   const editorDownload = processedImage ?? editorImage;
   const editorDownloadName = `deepxai-${processedImage ? "graded" : "photo"}-${editorRatio.replace(":", "x")}.jpg`;
   const selectedModel =
@@ -1059,9 +1035,9 @@ export default function Page() {
                 className="primary"
                 type="button"
                 onClick={handleEnhance}
-                disabled={!uploadedImage || processing}
+                disabled={!uploadedImage || isEnhancing || processing}
               >
-                {processing ? "Upscaling and sharpening…" : "Enhance image"}{" "}
+                {isEnhancing ? "Enhancing photo…" : "Enhance image"}{" "}
                 <b>↗</b>
               </button>
               {processingError && (
@@ -1078,20 +1054,42 @@ export default function Page() {
                 BEFORE / AFTER <span>Drag the handle to compare</span>
               </header>
               <div className="canvas">
-                <Compare
-                  position={position}
-                  imageSrc={enhancedImage ?? uploadedImage ?? undefined}
-                />
+                {enhancerImage && enhancedImage ? (
+                  <Compare
+                    position={position}
+                    imageSrc={enhancedImage}
+                    beforeImageSrc={enhancerImage}
+                  />
+                ) : isEnhancing ? (
+                  <div className="enhancement-status" role="status">
+                    <span className="loading-spinner" />
+                    <strong>Enhancing your photo</strong>
+                    <span>Preparing a sharper HD preview...</span>
+                  </div>
+                ) : (
+                  <div className="enhancement-status">
+                    <strong>
+                      {enhancerImage ? "Ready to enhance" : "Upload an image to begin"}
+                    </strong>
+                    <span>
+                      {enhancerImage
+                        ? "Your before and after preview will appear here"
+                        : "Choose a photo from the controls"}
+                    </span>
+                  </div>
+                )}
               </div>
-              <input
-                className="compare-range"
-                type="range"
-                min="0"
-                max="100"
-                value={position}
-                onChange={(event) => setPosition(Number(event.target.value))}
-                aria-label="Before and after comparison"
-              />
+              {enhancerImage && enhancedImage && (
+                <input
+                  className="compare-range"
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={position}
+                  onChange={(event) => setPosition(Number(event.target.value))}
+                  aria-label="Before and after comparison"
+                />
+              )}
               <footer>
                 <span>
                   ●{" "}
@@ -1209,20 +1207,36 @@ export default function Page() {
                 <span>{editorRatio} · 2400 × 3000</span>
               </header>
               <div className="canvas">
-                <Compare
-                  position={position}
-                  imageSrc={processedImage ?? uploadedImage ?? undefined}
-                />
+                {editorImage && processedImage ? (
+                  <Compare
+                    position={position}
+                    imageSrc={processedImage}
+                    beforeImageSrc={editorImage}
+                  />
+                ) : (
+                  <div className="enhancement-status">
+                    <strong>
+                      {editorImage ? "Ready to edit" : "Upload an image to begin"}
+                    </strong>
+                    <span>
+                      {editorImage
+                        ? "Apply a preset to compare your grade"
+                        : "Choose a photo from the controls"}
+                    </span>
+                  </div>
+                )}
               </div>
-              <input
-                className="compare-range"
-                type="range"
-                min="0"
-                max="100"
-                value={position}
-                onChange={(event) => setPosition(Number(event.target.value))}
-                aria-label="Editor before and after comparison"
-              />
+              {editorImage && processedImage && (
+                <input
+                  className="compare-range"
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={position}
+                  onChange={(event) => setPosition(Number(event.target.value))}
+                  aria-label="Editor before and after comparison"
+                />
+              )}
               <footer>
                 <span>
                   Preset: <b>{presets[preset]}</b>
@@ -2089,6 +2103,25 @@ export default function Page() {
           overflow: hidden;
           line-height: 0;
           background: transparent;
+        }
+        .enhancement-status {
+          min-height: 360px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 28px;
+          color: #7e8981;
+          text-align: center;
+          background: #fbfcf9;
+        }
+        .enhancement-status strong {
+          color: var(--ink);
+          font-size: 13px;
+        }
+        .enhancement-status span:not(.loading-spinner) {
+          font-size: 11px;
         }
         .before {
           position: absolute;
