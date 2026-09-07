@@ -2,21 +2,26 @@
 
 type GenerateRequest = {
   prompt: string;
+  model?: string;
   width?: number;
   height?: number;
 };
+
+const supportedModels = ["deepxai-vision", "dall-e-3", "imagen-3"] as const;
+type SupportedModel = (typeof supportedModels)[number];
 
 function isGenerateRequest(value: unknown): value is GenerateRequest {
   if (typeof value !== "object" || value === null || !("prompt" in value)) {
     return false;
   }
 
-  const request = value as { prompt: unknown; width?: unknown; height?: unknown };
+  const request = value as { prompt: unknown; model?: unknown; width?: unknown; height?: unknown };
   const dimensionsAreValid = [request.width, request.height].every(
     (dimension) => dimension === undefined || (typeof dimension === "number" && Number.isInteger(dimension)),
   );
+  const modelIsValid = request.model === undefined || (typeof request.model === "string" && supportedModels.includes(request.model as SupportedModel));
 
-  return typeof request.prompt === "string" && dimensionsAreValid;
+  return typeof request.prompt === "string" && dimensionsAreValid && modelIsValid;
 }
 
 function isValidDimension(value: number): boolean {
@@ -32,6 +37,7 @@ export async function POST(req: Request) {
     }
 
     const prompt = body.prompt.trim();
+    const model = body.model ?? "deepxai-vision";
     const width = body.width ?? 1024;
     const height = body.height ?? 1024;
 
@@ -46,9 +52,20 @@ export async function POST(req: Request) {
       );
     }
 
+    const providerModel = (() => {
+      switch (model) {
+        case "dall-e-3":
+          return "dall-e-3";
+        case "imagen-3":
+          return "imagen-3";
+        case "deepxai-vision":
+        default:
+          return "flux";
+      }
+    })();
     const seed = Math.floor(Math.random() * 1000000);
     const query = new URLSearchParams({
-      model: "flux",
+      model: providerModel,
       seed: String(seed),
       width: String(width),
       height: String(height),
