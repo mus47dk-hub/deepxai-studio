@@ -25,6 +25,15 @@ const models = [
     detail: "Google image model",
   },
 ] as const;
+const enhancerModels = [
+  { value: "real-esrgan-4x", label: "Real-ESRGAN (Ultra-Sharp 4K)" },
+  {
+    value: "gfpgan-face",
+    label: "GFPGAN / CodeFormer (Face Restoration)",
+  },
+  { value: "clarity-hd", label: "Clarity HD (Balanced Detail)" },
+] as const;
+type EnhancerModel = (typeof enhancerModels)[number]["value"];
 const editorRatios = ["1:1", "4:5", "9:16"];
 const presets = [
   "Gym & Fitness · Dark Moody Shred",
@@ -43,6 +52,10 @@ const presets = [
   "Natural & Portrait · Editorial Film Bloom",
   "Gym & Fitness · Electric Lime Flash",
   "Aesthetic & Vibe · Studio Tungsten",
+  "Moody Film Noir",
+  "Vintage Warmth (Kodak 35mm)",
+  "Cyberpunk Neon",
+  "Soft Aesthetic Pastel",
 ];
 const presetFilters = [
   "brightness(0.78) contrast(1.5) saturate(0.72) sepia(0.12)",
@@ -61,6 +74,10 @@ const presetFilters = [
   "brightness(1.06) contrast(1.04) saturate(0.9) sepia(0.16)",
   "brightness(0.94) contrast(1.55) saturate(1.72) hue-rotate(58deg)",
   "brightness(1.02) contrast(1.24) saturate(1.28) sepia(0.18) hue-rotate(-18deg)",
+  "brightness(0.72) contrast(1.5) saturate(0.18) grayscale(0.72)",
+  "brightness(1.08) contrast(1.08) saturate(0.9) sepia(0.38) hue-rotate(-8deg)",
+  "brightness(0.9) contrast(1.5) saturate(1.9) hue-rotate(285deg)",
+  "brightness(1.08) contrast(0.94) saturate(0.72) sepia(0.08) hue-rotate(18deg)",
 ];
 type HistoryItem = {
   id: string;
@@ -294,12 +311,10 @@ function jumpToComparison(value: number): void {
 
 function Compare({
   position,
-  variant = "warm",
   imageSrc,
   beforeImageSrc,
 }: {
   position: number;
-  variant?: string;
   imageSrc?: string;
   beforeImageSrc?: string;
 }) {
@@ -319,9 +334,14 @@ function Compare({
 
   return (
     <div className="compare">
-      <Artwork variant={variant} imageSrc={imageSrc} />
-      <div className="before" style={{ width: `${position}%` }}>
-        <Artwork variant="before" imageSrc={rawImage} />
+      <img className="compare-image after-image" src={imageSrc} alt="After" />
+      <div
+        className="before"
+        style={{
+          clipPath: `polygon(0 0, ${position}% 0, ${position}% 100%, 0 100%)`,
+        }}
+      >
+        <img className="compare-image" src={rawImage} alt="Before" />
       </div>
       <div className="compare-handle" style={{ left: `${position}%` }}>
         <b>↔</b>
@@ -407,6 +427,8 @@ export default function Page() {
   const [enhancerImage, setEnhancerImage] = useState<string | null>(null);
   const [editorImage, setEditorImage] = useState<string | null>(null);
   const [enhancedImage, setEnhancedImage] = useState<string | null>(null);
+  const [enhancerModel, setEnhancerModel] =
+    useState<EnhancerModel>("real-esrgan-4x");
   const [processedImage, setProcessedImage] = useState<string | null>(null);
   const [enhancerProcessing, setEnhancerProcessing] = useState(false);
   const [editorProcessing, setEditorProcessing] = useState(false);
@@ -555,63 +577,104 @@ export default function Page() {
     reader.readAsDataURL(file);
     event.target.value = "";
   };
-  const handleEnhance = () => {
-    if (!enhancerImage || !processingCanvasRef.current || !consumeCredit())
+  const handleEnhance = async () => {
+    const sourceImage = enhancerImage;
+    if (!sourceImage || !processingCanvasRef.current) return;
+    if (!sourceImage.startsWith("data:image/")) {
+      setEnhancerError("This photo has an invalid image format.");
+      setToast("This photo could not be enhanced.");
       return;
+    }
+    if (!consumeCredit()) return;
+
     const requestVersion = enhancerUploadVersionRef.current;
     setEnhancerProcessing(true);
     setEnhancerError(null);
-    const image = new Image();
-    image.onload = () => {
-      if (requestVersion !== enhancerUploadVersionRef.current) return;
-      const canvas = processingCanvasRef.current;
-      const context = canvas?.getContext("2d", { willReadFrequently: true });
-      if (
-        !canvas ||
-        !context ||
-        image.naturalWidth === 0 ||
-        image.naturalHeight === 0
-      ) {
-        setEnhancerProcessing(false);
-        setEnhancerError("This photo could not be enhanced.");
-        return;
-      }
-
-      canvas.width = image.naturalWidth * 2;
-      canvas.height = image.naturalHeight * 2;
-      context.filter = "none";
-      context.imageSmoothingEnabled = true;
-      context.imageSmoothingQuality = "high";
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-      let enhancedPixels = context.getImageData(
-        0,
-        0,
-        canvas.width,
-        canvas.height,
-      );
-      enhancedPixels = sharpenImage(enhancedPixels);
-      enhancedPixels = sharpenImage(enhancedPixels);
-      stretchContrast(enhancedPixels);
-      boostMicroContrast(enhancedPixels);
-      context.putImageData(enhancedPixels, 0, 0);
-      const enhancedDataUrl = canvas.toDataURL("image/jpeg", 0.95);
-      comparisonOriginals.set(enhancedDataUrl, enhancerImage);
-      setEnhancedImage(enhancedDataUrl);
-      saveHistory(
-        enhancedDataUrl,
-        "HD Enhancement",
-        `${sharpness}% sharpness · ${clarity}% clarity · ${bokeh}px bokeh`,
-      );
-      setEnhancerProcessing(false);
-    };
-    image.onerror = () => {
+    const failEnhancement = () => {
       if (requestVersion !== enhancerUploadVersionRef.current) return;
       setEnhancerProcessing(false);
       setEnhancerError("This photo could not be enhanced.");
+      setToast("This photo could not be enhanced.");
     };
-    image.src = enhancerImage;
+    try {
+      const response = await fetch("/api/enhance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: sourceImage, model: enhancerModel }),
+      });
+      const result: unknown = await response.json();
+      if (
+        !response.ok ||
+        typeof result !== "object" ||
+        result === null ||
+        !("image" in result) ||
+        typeof result.image !== "string"
+      ) {
+        throw new Error("Enhancement service unavailable");
+      }
+
+      const image = new Image();
+      image.onload = () => {
+        if (requestVersion !== enhancerUploadVersionRef.current) return;
+        try {
+        const canvas = processingCanvasRef.current;
+        const context = canvas?.getContext("2d", { willReadFrequently: true });
+        if (
+          !canvas ||
+          !context ||
+          image.naturalWidth === 0 ||
+          image.naturalHeight === 0
+        ) {
+          failEnhancement();
+          return;
+        }
+
+        canvas.width = image.naturalWidth * 2;
+        canvas.height = image.naturalHeight * 2;
+        context.filter = "none";
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+        let enhancedPixels = context.getImageData(
+          0,
+          0,
+          canvas.width,
+          canvas.height,
+        );
+        const sharpenPasses =
+          enhancerModel === "real-esrgan-4x"
+            ? 3
+            : enhancerModel === "gfpgan-face"
+              ? 1
+              : 2;
+        for (let pass = 0; pass < sharpenPasses; pass += 1) {
+          enhancedPixels = sharpenImage(enhancedPixels);
+        }
+        stretchContrast(enhancedPixels);
+        if (enhancerModel !== "gfpgan-face") {
+          boostMicroContrast(enhancedPixels);
+        }
+        context.putImageData(enhancedPixels, 0, 0);
+        const enhancedDataUrl = canvas.toDataURL("image/jpeg", 0.95);
+        comparisonOriginals.set(enhancedDataUrl, sourceImage);
+        setEnhancedImage(enhancedDataUrl);
+        saveHistory(
+          enhancedDataUrl,
+          "HD Enhancement",
+          `${sharpness}% sharpness · ${clarity}% clarity · ${bokeh}px bokeh`,
+        );
+        setEnhancerProcessing(false);
+        } catch {
+          failEnhancement();
+        }
+      };
+      image.onerror = failEnhancement;
+      image.src = result.image;
+    } catch {
+      failEnhancement();
+    }
   };
   const handleColorGrade = () => {
     if (!editorImage || !processingCanvasRef.current || !consumeCredit())
@@ -975,6 +1038,23 @@ export default function Page() {
                 unit=" px"
                 onChange={setBokeh}
               />
+              <label className="label model-label" htmlFor="enhancer-model">
+                Enhancement model
+              </label>
+              <select
+                id="enhancer-model"
+                className="enhancer-model"
+                value={enhancerModel}
+                onChange={(event) =>
+                  setEnhancerModel(event.target.value as EnhancerModel)
+                }
+              >
+                {enhancerModels.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
               <button
                 className="primary"
                 type="button"
@@ -1000,7 +1080,6 @@ export default function Page() {
               <div className="canvas">
                 <Compare
                   position={position}
-                  variant="fresh"
                   imageSrc={enhancedImage ?? uploadedImage ?? undefined}
                 />
               </div>
@@ -1132,7 +1211,6 @@ export default function Page() {
               <div className="canvas">
                 <Compare
                   position={position}
-                  variant={presets[preset].toLowerCase()}
                   imageSrc={processedImage ?? uploadedImage ?? undefined}
                 />
               </div>
@@ -1389,11 +1467,11 @@ export default function Page() {
         .canvas:has(.empty-upload-zone) .caption {
           display: none;
         }
-        .compare > .art,
-        .before > .art {
-          width: 100% !important;
-          height: 100% !important;
-          max-width: none !important;
+        .compare-image {
+          display: block;
+          width: 100%;
+          height: auto;
+          object-fit: contain;
         }
         .download-button {
           font-size: 0;
@@ -1790,10 +1868,10 @@ export default function Page() {
         .canvas {
           position: relative;
           overflow: hidden;
-          min-height: 500px;
           flex: 1;
-          border-radius: 3px;
-          background: #d7e3ce;
+          min-height: 0;
+          border-radius: 0;
+          background: transparent;
         }
         .preview:has(.generated-canvas) {
           padding: 0;
@@ -2006,18 +2084,24 @@ export default function Page() {
           accent-color: #a5bd4d;
         }
         .compare {
-          position: absolute;
-          inset: 0;
+          position: relative;
+          width: 100%;
           overflow: hidden;
+          line-height: 0;
+          background: transparent;
         }
         .before {
           position: absolute;
-          inset: 0 auto 0 0;
+          inset: 0;
           overflow: hidden;
+          z-index: 2;
         }
-        .before .art {
-          width: 100vw;
-          max-width: none;
+        .before .compare-image {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
         }
         .compare-handle {
           position: absolute;
@@ -2026,6 +2110,7 @@ export default function Page() {
           width: 1px;
           background: white;
           box-shadow: 0 0 5px #34483b;
+          z-index: 3;
         }
         .compare-handle b {
           position: absolute;
@@ -2059,6 +2144,15 @@ export default function Page() {
           width: calc(100% - 16px);
           margin: 15px 8px 2px;
           accent-color: #9db445;
+        }
+        .enhancer-model {
+          width: 100%;
+          border: 1px solid var(--line);
+          border-radius: 3px;
+          background: #fff;
+          color: var(--ink);
+          padding: 10px 11px;
+          font-size: 11px;
         }
         .preset-grid {
           display: grid;
@@ -2196,11 +2290,8 @@ export default function Page() {
         }
       `}</style>
       <style jsx global>{`
-        .compare > .art,
-        .before > .art {
-          width: 100% !important;
-          height: 100% !important;
-          max-width: none !important;
+        .preview:has(.compare) {
+          padding: 0;
         }
       `}</style>
       <style jsx global>{`

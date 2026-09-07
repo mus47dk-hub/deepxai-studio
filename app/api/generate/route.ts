@@ -9,6 +9,10 @@ type GenerateRequest = {
 
 const supportedModels = ["deepxai-vision", "dall-e-3", "imagen-3"] as const;
 type SupportedModel = (typeof supportedModels)[number];
+const qualitySuffix =
+  "masterpiece, ultra-detailed 8k resolution, crisp focus, studio lighting, photorealistic";
+const negativePrompt =
+  "blurry, low quality, distorted anatomy, pixelated, washed out colors, noisy, artifacts, deformed";
 
 function isGenerateRequest(value: unknown): value is GenerateRequest {
   if (typeof value !== "object" || value === null || !("prompt" in value)) {
@@ -63,15 +67,18 @@ export async function POST(req: Request) {
           return "flux";
       }
     })();
+    const qualityPrompt = `${prompt}, ${qualitySuffix}`;
     const seed = Math.floor(Math.random() * 1000000);
     const query = new URLSearchParams({
       model: providerModel,
       seed: String(seed),
-      width: String(width),
-      height: String(height),
+      width: String(Math.min(width, 2048)),
+      height: String(Math.min(height, 2048)),
       nologo: "true",
+      negative_prompt: negativePrompt,
+      quality: "hd",
     });
-    const targetUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?${query.toString()}`;
+    const targetUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(qualityPrompt)}?${query.toString()}`;
 
     const response = await fetch(targetUrl, {
       signal: AbortSignal.timeout(60_000),
